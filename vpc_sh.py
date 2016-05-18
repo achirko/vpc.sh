@@ -5,6 +5,8 @@ import click
 import boto.ec2
 from fabric.api import env, run, settings
 from fabric.api import sudo as run_sudo
+from fabric import exceptions as fabric_exc
+from tabulate import tabulate
 
 SETTINGS_FILE = "~/.vpc.sh/settings"
 
@@ -20,9 +22,10 @@ class PromptException(Exception):
 @click.option('--aws-access-key-id', help='AWS access key id.')
 @click.option('--aws-secret-access-key', help='AWS secret access key.')
 @click.option('--sudo', is_flag=True, help="Run command with sudo privileges")
+@click.option('--command-timeout', help='Command timeout, in seconds', type=int)
 @click.pass_context
 def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
-           aws_secret_access_key, sudo):
+           aws_secret_access_key, sudo, command_timeout):
     cfg = ConfigParser.RawConfigParser()
     cfg.read(os.path.expanduser(SETTINGS_FILE))
 
@@ -46,6 +49,8 @@ def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
     env.abort_exception = PromptException
     env.disable_known_hosts = True
     env.colorize_errors = True
+    if command_timeout:
+        env.command_timeout = command_timeout
 
     conn = boto.ec2.connect_to_region(
         aws_region,
@@ -100,20 +105,24 @@ def run_one(ctx, instance_id, cmd):
 
 
 def _run_command(ctx, instance, cmd):
-    click.secho("{} - {} - {}".format(instance.tags.get('Name'),
-                                      instance.id,
-                                      instance.private_ip_address),
-                fg='green',
-                bold=True)
+    table = tabulate(
+        [[instance.tags.get('Name'), instance.id, instance.private_ip_address]],
+        tablefmt='simple'
+    )
+    click.echo()
+    click.secho(table, fg='green', bold=True)
     for user in ctx.obj['remote_user']:
         host_string = "{}@{}".format(user, instance.private_ip_address)
-        click.secho("try {}".format(host_string), fg='blue')
+        click.secho("try {}".format(host_string), fg='green')
         with settings(host_string=host_string):
             try:
                 if ctx.obj['sudo']:
                     run_sudo(cmd)
                 else:
                     run(cmd)
+            except fabric_exc.CommandTimeout as e:
+                click.secho(str(e), fg='red')
+                break
             except PromptException:
                 # try next user
                 continue
