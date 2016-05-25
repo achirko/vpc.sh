@@ -1,4 +1,5 @@
 import os
+import sys
 from atexit import register as run_on_exit
 import ConfigParser
 import click
@@ -7,6 +8,9 @@ from fabric.api import env, run, settings
 from fabric.api import sudo as run_sudo
 from fabric import exceptions as fabric_exc
 from tabulate import tabulate
+from cStringIO import StringIO
+from contextlib import contextmanager
+import multiprocessing
 
 SETTINGS_FILE = "~/.vpc.sh/settings"
 
@@ -89,10 +93,32 @@ def run_all(ctx, filter, cmd, skip, only, ignore_errors):
         if instance.state == "running"
     ]
 
+    pool_inputs = []
     for instance in instances:
         if instance.id in skip or (only and instance.id not in only):
             continue
-        _run_command(ctx, instance, cmd)
+        pool_inputs.append(
+            (ctx.obj['remote_user'],
+             ctx.obj['sudo'],
+             cmd,
+             instance.tags.get('Name', ''),
+             instance.id,
+             instance.private_ip_address,)
+        )
+
+    pool_size = multiprocessing.cpu_count() * 2
+    lock = multiprocessing.Lock()
+    pool = multiprocessing.Pool(processes=pool_size,
+                                initializer=mp_init_lock,
+                                initargs=(lock,))
+    pool.map(mp_run_command_wrapper, pool_inputs)
+    pool.close()
+    pool.join()
+
+    # for instance in instances:
+    #     if instance.id in skip or (only and instance.id not in only):
+    #         continue
+    #     run_command(ctx, instance, cmd)
 
 
 @vpc_sh.command("run-one")
@@ -101,22 +127,45 @@ def run_all(ctx, filter, cmd, skip, only, ignore_errors):
 @click.pass_context
 def run_one(ctx, instance_id, cmd):
     instance = ctx.obj['aws_conn'].get_only_instances(instance_ids=[instance_id])[0]
-    _run_command(ctx, instance, cmd)
+    run_command(ctx, instance, cmd)
 
 
-def _run_command(ctx, instance, cmd):
-    table = tabulate(
-        [[instance.tags.get('Name'), instance.id, instance.private_ip_address]],
-        tablefmt='simple'
-    )
+def mp_init_lock(l):
+    global lock
+    lock = l
+
+
+def mp_run_command_wrapper(args):
+    @contextmanager
+    def synchronize_stdout():
+        stringio = StringIO()
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = stringio, stringio
+        try:
+            yield
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
+            lock.acquire()
+            # TODO preserve output colors
+            sys.stdout.write(stringio.getvalue())
+            sys.stdout.flush()
+            lock.release()
+
+    with synchronize_stdout():
+        return run_command(*args)
+
+
+def run_command(remote_user, sudo, cmd, instance_name, instance_id, instance_ip):
+    table = tabulate([[instance_name, instance_id, instance_ip]],
+                     tablefmt='simple')
     click.echo()
     click.secho(table, fg='green', bold=True)
-    for user in ctx.obj['remote_user']:
-        host_string = "{}@{}".format(user, instance.private_ip_address)
+    for user in remote_user:
+        host_string = "{}@{}".format(user, instance_ip)
         click.secho("try {}".format(host_string), fg='green')
         with settings(host_string=host_string):
             try:
-                if ctx.obj['sudo']:
+                if sudo:
                     run_sudo(cmd)
                 else:
                     run(cmd)
