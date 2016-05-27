@@ -169,6 +169,7 @@ def run_command(remote_user, sudo, cmd, instance_name, instance_id, instance_ip)
                     run_sudo(cmd)
                 else:
                     run(cmd)
+            # TODO fabric.exceptions.NetworkError
             except fabric_exc.CommandTimeout as e:
                 click.secho(str(e), fg='red')
                 break
