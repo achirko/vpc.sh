@@ -26,7 +26,9 @@ class PromptException(Exception):
 @click.option('--aws-access-key-id', help='AWS access key id.')
 @click.option('--aws-secret-access-key', help='AWS secret access key.')
 @click.option('--sudo', is_flag=True, help="Run command with sudo privileges")
-@click.option('--command-timeout', help='Command timeout, in seconds', type=int)
+@click.option('--command-timeout',
+              help='Command timeout, in seconds. 0 is no timeout',
+              type=int)
 @click.pass_context
 def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
            aws_secret_access_key, sudo, command_timeout):
@@ -68,7 +70,7 @@ def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
     ctx.obj['sudo'] = sudo
 
 
-@vpc_sh.command("run-all")
+@vpc_sh.command("run")
 @click.option('-f', '--filter', multiple=True,
               help='Filter instances by tags, in form of "tag-name=tag-value"')
 @click.option('--skip', multiple=True, help="Instance id to skip.")
