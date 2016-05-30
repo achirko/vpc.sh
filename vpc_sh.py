@@ -21,17 +21,18 @@ class PromptException(Exception):
 
 @click.group()
 @click.option('--private-key', help='Path to ssh key.')
-@click.option('--remote-user', help='Remote user name')
+@click.option('--remote-user', help='Remote user name.')
 @click.option('--aws-region', help='AWS region.')
 @click.option('--aws-access-key-id', help='AWS access key id.')
 @click.option('--aws-secret-access-key', help='AWS secret access key.')
-@click.option('--sudo', is_flag=True, help="Run command with sudo privileges")
+@click.option('--sudo', is_flag=True, help="Run command with sudo privileges.")
+@click.option('--parallel', is_flag=True, help="Run all commands in parallel.")
 @click.option('--command-timeout',
-              help='Command timeout, in seconds. 0 is no timeout',
+              help='Command timeout, in seconds. 0 is no timeout.',
               type=int)
 @click.pass_context
 def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
-           aws_secret_access_key, sudo, command_timeout):
+           aws_secret_access_key, sudo, parallel, command_timeout):
     cfg = ConfigParser.RawConfigParser()
     cfg.read(os.path.expanduser(SETTINGS_FILE))
 
@@ -68,19 +69,19 @@ def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
     ctx.obj['private_key'] = private_key
     ctx.obj['remote_user'] = remote_user
     ctx.obj['sudo'] = sudo
+    ctx.obj['parallel'] = parallel
 
 
 @vpc_sh.command("run")
 @click.option('-f', '--filter', multiple=True,
               help='Filter instances by tags, in form of "tag-name=tag-value"')
 @click.option('--skip', multiple=True, help="Instance id to skip.")
-@click.option('--only', multiple=True, help="Instance id to run command on.")
 @click.option('--ignore-errors', is_flag=True,
               help="Don't exit when one of the hosts failed to successfully "
                    "execute the command.")
 @click.argument("cmd")
 @click.pass_context
-def run_all(ctx, filter, cmd, skip, only, ignore_errors):
+def run_all(ctx, filter, cmd, skip, ignore_errors):
     if ignore_errors:
         env.warn_only = True
 
@@ -92,35 +93,39 @@ def run_all(ctx, filter, cmd, skip, only, ignore_errors):
     instances = [
         instance
         for instance in ctx.obj['aws_conn'].get_only_instances(filters=ec2_filter)
-        if instance.state == "running"
+        if instance.state == "running" and instance.id not in skip
     ]
 
-    pool_inputs = []
-    for instance in instances:
-        if instance.id in skip or (only and instance.id not in only):
-            continue
-        pool_inputs.append(
-            (ctx.obj['remote_user'],
-             ctx.obj['sudo'],
-             cmd,
-             instance.tags.get('Name', ''),
-             instance.id,
-             instance.private_ip_address,)
-        )
+    if ctx.obj['parallel']:
+        pool_inputs = []
+        for instance in instances:
+            pool_inputs.append(
+                (ctx.obj['remote_user'],
+                 ctx.obj['sudo'],
+                 cmd,
+                 instance.tags.get('Name', ''),
+                 instance.id,
+                 instance.private_ip_address,)
+            )
 
-    pool_size = multiprocessing.cpu_count() * 2
-    lock = multiprocessing.Lock()
-    pool = multiprocessing.Pool(processes=pool_size,
-                                initializer=mp_init_lock,
-                                initargs=(lock,))
-    pool.map(mp_run_command_wrapper, pool_inputs)
-    pool.close()
-    pool.join()
-
-    # for instance in instances:
-    #     if instance.id in skip or (only and instance.id not in only):
-    #         continue
-    #     run_command(ctx, instance, cmd)
+        pool_size = len(pool_inputs)
+        lock = multiprocessing.Lock()
+        pool = multiprocessing.Pool(processes=pool_size,
+                                    initializer=mp_init_lock,
+                                    initargs=(lock,))
+        pool.map(mp_run_command_wrapper, pool_inputs)
+        pool.close()
+        pool.join()
+    else:
+        for instance in instances:
+            run_command(
+                ctx.obj['remote_user'],
+                ctx.obj['sudo'],
+                cmd,
+                instance.tags.get('Name', ''),
+                instance.id,
+                instance.private_ip_address
+            )
 
 
 @vpc_sh.command("run-one")
@@ -171,8 +176,7 @@ def run_command(remote_user, sudo, cmd, instance_name, instance_id, instance_ip)
                     run_sudo(cmd)
                 else:
                     run(cmd)
-            # TODO fabric.exceptions.NetworkError
-            except fabric_exc.CommandTimeout as e:
+            except (fabric_exc.CommandTimeout, fabric_exc.NetworkError) as e:
                 click.secho(str(e), fg='red')
                 break
             except PromptException:
