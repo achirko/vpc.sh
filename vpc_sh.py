@@ -1,4 +1,5 @@
 import os
+import sys
 from atexit import register as run_on_exit
 import ConfigParser
 import click
@@ -7,6 +8,9 @@ from fabric.api import env, run, settings
 from fabric.api import sudo as run_sudo
 from fabric import exceptions as fabric_exc
 from tabulate import tabulate
+from cStringIO import StringIO
+from contextlib import contextmanager
+import multiprocessing
 
 SETTINGS_FILE = "~/.vpc.sh/settings"
 
@@ -17,15 +21,18 @@ class PromptException(Exception):
 
 @click.group()
 @click.option('--private-key', help='Path to ssh key.')
-@click.option('--remote-user', help='Remote user name')
+@click.option('--remote-user', help='Remote user name.')
 @click.option('--aws-region', help='AWS region.')
 @click.option('--aws-access-key-id', help='AWS access key id.')
 @click.option('--aws-secret-access-key', help='AWS secret access key.')
-@click.option('--sudo', is_flag=True, help="Run command with sudo privileges")
-@click.option('--command-timeout', help='Command timeout, in seconds', type=int)
+@click.option('--sudo', is_flag=True, help="Run command with sudo privileges.")
+@click.option('--parallel', is_flag=True, help="Run all commands in parallel.")
+@click.option('--command-timeout',
+              help='Command timeout, in seconds. 0 is no timeout.',
+              type=int)
 @click.pass_context
 def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
-           aws_secret_access_key, sudo, command_timeout):
+           aws_secret_access_key, sudo, parallel, command_timeout):
     cfg = ConfigParser.RawConfigParser()
     cfg.read(os.path.expanduser(SETTINGS_FILE))
 
@@ -62,19 +69,19 @@ def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
     ctx.obj['private_key'] = private_key
     ctx.obj['remote_user'] = remote_user
     ctx.obj['sudo'] = sudo
+    ctx.obj['parallel'] = parallel
 
 
-@vpc_sh.command("run-all")
+@vpc_sh.command("run")
 @click.option('-f', '--filter', multiple=True,
               help='Filter instances by tags, in form of "tag-name=tag-value"')
 @click.option('--skip', multiple=True, help="Instance id to skip.")
-@click.option('--only', multiple=True, help="Instance id to run command on.")
 @click.option('--ignore-errors', is_flag=True,
               help="Don't exit when one of the hosts failed to successfully "
                    "execute the command.")
 @click.argument("cmd")
 @click.pass_context
-def run_all(ctx, filter, cmd, skip, only, ignore_errors):
+def run_all(ctx, filter, cmd, skip, ignore_errors):
     if ignore_errors:
         env.warn_only = True
 
@@ -86,13 +93,39 @@ def run_all(ctx, filter, cmd, skip, only, ignore_errors):
     instances = [
         instance
         for instance in ctx.obj['aws_conn'].get_only_instances(filters=ec2_filter)
-        if instance.state == "running"
+        if instance.state == "running" and instance.id not in skip
     ]
 
-    for instance in instances:
-        if instance.id in skip or (only and instance.id not in only):
-            continue
-        _run_command(ctx, instance, cmd)
+    if ctx.obj['parallel']:
+        pool_inputs = []
+        for instance in instances:
+            pool_inputs.append(
+                (ctx.obj['remote_user'],
+                 ctx.obj['sudo'],
+                 cmd,
+                 instance.tags.get('Name', ''),
+                 instance.id,
+                 instance.private_ip_address,)
+            )
+
+        pool_size = len(pool_inputs)
+        lock = multiprocessing.Lock()
+        pool = multiprocessing.Pool(processes=pool_size,
+                                    initializer=mp_init_lock,
+                                    initargs=(lock,))
+        pool.map(mp_run_command_wrapper, pool_inputs)
+        pool.close()
+        pool.join()
+    else:
+        for instance in instances:
+            run_command(
+                ctx.obj['remote_user'],
+                ctx.obj['sudo'],
+                cmd,
+                instance.tags.get('Name', ''),
+                instance.id,
+                instance.private_ip_address
+            )
 
 
 @vpc_sh.command("run-one")
@@ -101,26 +134,49 @@ def run_all(ctx, filter, cmd, skip, only, ignore_errors):
 @click.pass_context
 def run_one(ctx, instance_id, cmd):
     instance = ctx.obj['aws_conn'].get_only_instances(instance_ids=[instance_id])[0]
-    _run_command(ctx, instance, cmd)
+    run_command(ctx, instance, cmd)
 
 
-def _run_command(ctx, instance, cmd):
-    table = tabulate(
-        [[instance.tags.get('Name'), instance.id, instance.private_ip_address]],
-        tablefmt='simple'
-    )
+def mp_init_lock(l):
+    global lock
+    lock = l
+
+
+def mp_run_command_wrapper(args):
+    @contextmanager
+    def synchronize_stdout():
+        stringio = StringIO()
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = stringio, stringio
+        try:
+            yield
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
+            lock.acquire()
+            # TODO preserve output colors
+            sys.stdout.write(stringio.getvalue())
+            sys.stdout.flush()
+            lock.release()
+
+    with synchronize_stdout():
+        return run_command(*args)
+
+
+def run_command(remote_user, sudo, cmd, instance_name, instance_id, instance_ip):
+    table = tabulate([[instance_name, instance_id, instance_ip]],
+                     tablefmt='simple')
     click.echo()
     click.secho(table, fg='green', bold=True)
-    for user in ctx.obj['remote_user']:
-        host_string = "{}@{}".format(user, instance.private_ip_address)
+    for user in remote_user:
+        host_string = "{}@{}".format(user, instance_ip)
         click.secho("try {}".format(host_string), fg='green')
         with settings(host_string=host_string):
             try:
-                if ctx.obj['sudo']:
+                if sudo:
                     run_sudo(cmd)
                 else:
                     run(cmd)
-            except fabric_exc.CommandTimeout as e:
+            except (fabric_exc.CommandTimeout, fabric_exc.NetworkError) as e:
                 click.secho(str(e), fg='red')
                 break
             except PromptException:

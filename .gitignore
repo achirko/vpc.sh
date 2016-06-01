@@ -1,0 +1,4 @@
+.env
+venv
+vpc.sh.egg-info
+*.pyc
