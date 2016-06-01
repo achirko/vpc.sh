@@ -134,7 +134,10 @@ def run_all(ctx, filter, cmd, skip, ignore_errors):
 @click.pass_context
 def run_one(ctx, instance_id, cmd):
     instance = ctx.obj['aws_conn'].get_only_instances(instance_ids=[instance_id])[0]
-    run_command(ctx, instance, cmd)
+    run_command(
+        ctx.obj['remote_user'], ctx.obj['sudo'], cmd,
+        instance.tags.get('Name', ''), instance.id, instance.private_ip_address
+    )
 
 
 def mp_init_lock(l):
