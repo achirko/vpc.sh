@@ -1,10 +1,12 @@
 import os
 import sys
+import time
+import tempfile
 from atexit import register as run_on_exit
 import ConfigParser
 import click
 import boto.ec2
-from fabric.api import env, run, settings
+from fabric.api import env, run, settings, put
 from fabric.api import sudo as run_sudo
 from fabric import exceptions as fabric_exc
 from tabulate import tabulate
@@ -79,9 +81,18 @@ def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
 @click.option('--ignore-errors', is_flag=True,
               help="Don't exit when one of the hosts failed to successfully "
                    "execute the command.")
-@click.argument("cmd")
+@click.argument("cmd", required=False)
 @click.pass_context
 def run_all(ctx, filter, cmd, skip, ignore_errors):
+    if not sys.stdin.isatty() and cmd:
+        ctx.fail("Invalid input")
+
+    script = None
+    if not sys.stdin.isatty():
+        script_str = sys.stdin.read()
+        script = tempfile.NamedTemporaryFile(bufsize=0)
+        script.write(script_str)
+
     if ignore_errors:
         env.warn_only = True
 
@@ -105,7 +116,8 @@ def run_all(ctx, filter, cmd, skip, ignore_errors):
                  cmd,
                  instance.tags.get('Name', ''),
                  instance.id,
-                 instance.private_ip_address,)
+                 instance.private_ip_address,
+                 script,)
             )
 
         pool_size = len(pool_inputs)
@@ -124,19 +136,31 @@ def run_all(ctx, filter, cmd, skip, ignore_errors):
                 cmd,
                 instance.tags.get('Name', ''),
                 instance.id,
-                instance.private_ip_address
+                instance.private_ip_address,
+                script
             )
 
 
 @vpc_sh.command("run-one")
 @click.argument("instance-id")
-@click.argument("cmd")
+@click.argument("cmd", required=False)
 @click.pass_context
 def run_one(ctx, instance_id, cmd):
+    if not sys.stdin.isatty() and cmd:
+        ctx.fail("Invalid input")
+
+    script = None
+    if not sys.stdin.isatty():
+        script_str = sys.stdin.read()
+        script = tempfile.NamedTemporaryFile(bufsize=0)
+        os.chmod(script.name, 0666)
+        script.write(script_str)
+
     instance = ctx.obj['aws_conn'].get_only_instances(instance_ids=[instance_id])[0]
     run_command(
         ctx.obj['remote_user'], ctx.obj['sudo'], cmd,
-        instance.tags.get('Name', ''), instance.id, instance.private_ip_address
+        instance.tags.get('Name', ''), instance.id,
+        instance.private_ip_address, script
     )
 
 
@@ -165,7 +189,8 @@ def mp_run_command_wrapper(args):
         return run_command(*args)
 
 
-def run_command(remote_user, sudo, cmd, instance_name, instance_id, instance_ip):
+def run_command(remote_user, sudo, cmd, instance_name, instance_id,
+                instance_ip, script=None):
     table = tabulate([[instance_name, instance_id, instance_ip]],
                      tablefmt='simple')
     click.echo()
@@ -175,6 +200,14 @@ def run_command(remote_user, sudo, cmd, instance_name, instance_id, instance_ip)
         click.secho("try {}".format(host_string), fg='green')
         with settings(host_string=host_string):
             try:
+                if script:
+                    remote_folder = "/tmp/vpc.sh/{}".format(time.time())
+                    remote_script = os.path.join(
+                        remote_folder, os.path.basename(script.name)
+                    )
+                    run("mkdir -p {}".format(remote_folder))
+                    put(script.name, remote_folder, mode=0755)
+                    cmd = remote_script
                 if sudo:
                     run_sudo(cmd)
                 else:
