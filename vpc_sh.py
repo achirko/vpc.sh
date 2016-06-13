@@ -27,8 +27,10 @@ class PromptException(Exception):
 @click.option('--aws-region', help='AWS region.')
 @click.option('--aws-access-key-id', help='AWS access key id.')
 @click.option('--aws-secret-access-key', help='AWS secret access key.')
-@click.option('--sudo', is_flag=True, help="Run command with sudo privileges.")
-@click.option('--parallel', is_flag=True, help="Run all commands in parallel.")
+@click.option(
+    '--sudo', '-s', is_flag=True, help="Run command with sudo privileges.")
+@click.option(
+    '--parallel', '-p', is_flag=True, help="Run all commands in parallel.")
 @click.option('--command-timeout',
               help='Command timeout, in seconds. 0 is no timeout.',
               type=int)
