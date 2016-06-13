@@ -13,6 +13,5 @@
 - [ ] Filter by launch date (`launched-before` and `launched-after` )
 - [ ] Filter by keypair
 - [ ] Profiles (group settings and filters in named profile, and specify profile on vpc.sh run)
-- [ ] heredocs-style multiple commands
 
 ## Usage
