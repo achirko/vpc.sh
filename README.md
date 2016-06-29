@@ -36,8 +36,8 @@ vpc.sh run-one --help
 Create settings file:
 
 ```
-mkdir ~.vpc.sh
-cat >>~.vpc.sh/settings<<-EOF
+mkdir ~/.vpc.sh
+cat >>~/.vpc.sh/settings<<-EOF
 [default]
 remote_user = ubuntu,centos,root
 private_key = /home/ubuntu/.ssh/ec2.pem
