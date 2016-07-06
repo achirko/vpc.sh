@@ -10,7 +10,7 @@
 - [x] Multiple remote users (if can't authenticate - will try next username)
 - [x] Filter by tags
 - [x] Parallel execution
-- [ ] Profiles (group settings and filters in named profile, and specify profile on `vpc.sh run`)
+- [ ] Profiles (group settings and filters in named profile, and specify profile on `vpc.py run`)
 - [ ] Filter by launch date (`launched-before` and `launched-after` )
 - [ ] Filter by keypair
 - [ ] --dry-run flag
@@ -20,7 +20,7 @@
 Install the latest stable version:
 
 ```
-pip install vpc.sh
+pip install vpc.py
 ```
 
 ## Usage
@@ -28,16 +28,16 @@ pip install vpc.sh
 Get help:
 
 ```
-vpc.sh --help
-vpc.sh run --help
-vpc.sh run-one --help
+vpc.py --help
+vpc.py run --help
+vpc.py run-one --help
 ```
 
 Create settings file:
 
 ```
-mkdir ~/.vpc.sh
-cat >>~/.vpc.sh/settings<<-EOF
+mkdir ~/.vpc.py
+cat >>~/.vpc.py/settings<<-EOF
 [default]
 remote_user = ubuntu,centos,root
 private_key = /home/ubuntu/.ssh/ec2.pem
@@ -50,13 +50,13 @@ EOF
 Filter by tag 'owner=automation' and run command on resulted instances:
 
 ```
-vpc.sh run -f owner=automation 'df -h'
+vpc.py run -f owner=automation 'df -h'
 ```
 
 Run script:
 
 ```
-vpc.sh run -f owner=automation<<-EOF
+vpc.py run -f owner=automation<<-EOF
 echo hello
 uname -a
 EOF
@@ -65,6 +65,6 @@ EOF
 Run any script or binary (assuming it's compatible with target hosts):
 
 ```
-vpc.sh run -f owner=automation < some_python_script.py
-vpc.sh run -f owner=automation < /usr/local/bin/weather
+vpc.py run -f owner=automation < some_python_script.py
+vpc.py run -f owner=automation < /usr/local/bin/weather
 ```

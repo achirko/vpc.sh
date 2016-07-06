@@ -14,7 +14,7 @@ from cStringIO import StringIO
 from contextlib import contextmanager
 import multiprocessing
 
-SETTINGS_FILE = "~/.vpc.sh/settings"
+SETTINGS_FILE = "~/.vpc.py/settings"
 
 
 class PromptException(Exception):
@@ -35,7 +35,7 @@ class PromptException(Exception):
               help='Command timeout, in seconds. 0 is no timeout.',
               type=int)
 @click.pass_context
-def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
+def vpc_py(ctx, private_key, remote_user, aws_region, aws_access_key_id,
            aws_secret_access_key, sudo, parallel, command_timeout):
     cfg = ConfigParser.RawConfigParser()
     cfg.read(os.path.expanduser(SETTINGS_FILE))
@@ -76,7 +76,7 @@ def vpc_sh(ctx, private_key, remote_user, aws_region, aws_access_key_id,
     ctx.obj['parallel'] = parallel
 
 
-@vpc_sh.command("run")
+@vpc_py.command("run")
 @click.option('-f', '--filter', multiple=True,
               help='Filter instances by tags, in form of "tag-name=tag-value"')
 @click.option('--skip', multiple=True, help="Instance id to skip.")
@@ -143,7 +143,7 @@ def run_all(ctx, filter, cmd, skip, ignore_errors):
             )
 
 
-@vpc_sh.command("run-one")
+@vpc_py.command("run-one")
 @click.argument("instance-id")
 @click.argument("cmd", required=False)
 @click.pass_context
@@ -203,7 +203,7 @@ def run_command(remote_user, sudo, cmd, instance_name, instance_id,
         with settings(host_string=host_string):
             try:
                 if script:
-                    remote_folder = "/tmp/vpc.sh/{}".format(time.time())
+                    remote_folder = "/tmp/vpc.py/{}".format(time.time())
                     remote_script = os.path.join(
                         remote_folder, os.path.basename(script.name)
                     )
@@ -226,4 +226,4 @@ def run_command(remote_user, sudo, cmd, instance_name, instance_id,
                 break
 
 if __name__ == "__main__":
-    vpc_sh()
+    vpc_py()

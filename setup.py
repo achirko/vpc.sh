@@ -7,18 +7,18 @@ except(IOError, ImportError):
     readme = open('README.md').read()
 
 setup(
-    name='vpc.sh',
+    name='vpc.py',
     version='0.1',
     description="CLI tool to run shell commands on ec2 instances.",
     long_description=readme,
-    url="https://github.com/achirko/vpc.sh",
+    url="https://github.com/achirko/vpc.py",
     author='Oleksandr Chyrko',
     author_email='aleksandr.chirko@gmail.com',
-    py_modules=['vpc_sh'],
+    py_modules=['vpc'],
     install_requires=['Click', 'boto', 'fabric', 'tabulate'],
     entry_points='''
         [console_scripts]
-        vpc.sh=vpc_sh:vpc_sh
+        vpc.py=vpc:vpc_py
     ''',
     classifiers=[
           'Environment :: Console',
