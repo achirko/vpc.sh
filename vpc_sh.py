@@ -56,7 +56,12 @@ def vpc_sh(ctx, ec2_api_url, private_key, remote_user, aws_region,
         aws_access_key_id or cfg.get('default', 'aws_access_key_id')
     aws_secret_access_key = \
         aws_secret_access_key or cfg.get('default', 'aws_secret_access_key')
-    ec2_api_url = ec2_api_url or cfg.get('default', 'ec2_api_url')
+    ec2_api_url = (
+        ec2_api_url or
+        cfg.get('default', 'ec2_api_url')
+        if cfg.has_option('default', 'ec2_api_url')
+        else None
+    )
 
     env.key_filename = private_key
     env.skip_bad_hosts = True
