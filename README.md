@@ -1,9 +1,9 @@
-# CLI tool to run commands on ec2 instances.
+# CLI tool to run commands on ec2 instances. Written in Python.
 
 ## Supported cloud platforms
 
 - [x] AWS EC2
-- [ ] Openstack via ec2 API endpoint
+- [x] Openstack via ec2 API endpoint
 
 ## Features
 

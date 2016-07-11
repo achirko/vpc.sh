@@ -22,7 +22,7 @@ class PromptException(Exception):
 
 
 @click.group()
-@click.option('--os-ec2-api-url', help='Openstack ec2 api url')
+@click.option('--ec2-api-url', help='EC2 api url')
 @click.option('--private-key', help='Path to ssh key.')
 @click.option('--remote-user', help='Remote user name.')
 @click.option('--aws-region', help='AWS region.')
@@ -36,8 +36,9 @@ class PromptException(Exception):
               help='Command timeout, in seconds. 0 is no timeout.',
               type=int)
 @click.pass_context
-def vpc_sh(ctx, os_ec2_api_url, private_key, remote_user, aws_region, aws_access_key_id,
-           aws_secret_access_key, sudo, parallel, command_timeout):
+def vpc_sh(ctx, ec2_api_url, private_key, remote_user, aws_region,
+           aws_access_key_id, aws_secret_access_key, sudo, parallel,
+           command_timeout):
     cfg = ConfigParser.RawConfigParser()
     cfg.read(os.path.expanduser(SETTINGS_FILE))
 
@@ -55,7 +56,7 @@ def vpc_sh(ctx, os_ec2_api_url, private_key, remote_user, aws_region, aws_access
         aws_access_key_id or cfg.get('default', 'aws_access_key_id')
     aws_secret_access_key = \
         aws_secret_access_key or cfg.get('default', 'aws_secret_access_key')
-    os_ec2_api_url = os_ec2_api_url or cfg.get('default', 'os_ec2_api_url')
+    ec2_api_url = ec2_api_url or cfg.get('default', 'ec2_api_url')
 
     env.key_filename = private_key
     env.skip_bad_hosts = True
@@ -66,9 +67,9 @@ def vpc_sh(ctx, os_ec2_api_url, private_key, remote_user, aws_region, aws_access
     if command_timeout:
         env.command_timeout = command_timeout
 
-    if os_ec2_api_url:
-	conn = boto.connect_ec2_endpoint(
-            url=os_ec2_api_url,
+    if ec2_api_url:
+        conn = boto.connect_ec2_endpoint(
+            url=ec2_api_url,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key)
     else:
