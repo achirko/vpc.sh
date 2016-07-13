@@ -13,6 +13,7 @@ from tabulate import tabulate
 from cStringIO import StringIO
 from contextlib import contextmanager
 import multiprocessing
+from datetime import datetime
 
 SETTINGS_FILE = "~/.vpc.sh/settings"
 
@@ -100,9 +101,13 @@ def vpc_sh(ctx, ec2_api_url, private_key, remote_user, aws_region,
 @click.option('--ignore-errors', is_flag=True,
               help="Don't exit when one of the hosts failed to successfully "
                    "execute the command.")
+@click.option('--launched-before',
+              help='Choose instances launched before some date. Date format: year-month-day(%Y-%m-%d)')
+@click.option('--launched-after',
+              help='Choose instances launched after some date. Date format: year-month-day(%Y-%m-%d)')
 @click.argument("cmd", required=False)
 @click.pass_context
-def run_all(ctx, filter, cmd, skip, ignore_errors):
+def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_after):
     if not sys.stdin.isatty() and cmd:
         ctx.fail("Invalid input")
 
@@ -125,6 +130,29 @@ def run_all(ctx, filter, cmd, skip, ignore_errors):
         for instance in ctx.obj['aws_conn'].get_only_instances(filters=ec2_filter)
         if instance.state == "running" and instance.id not in skip
     ]
+
+    instances_by_date = []
+    if launched_before and not launched_after:
+        for i in instances:
+            if datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() < \
+                datetime.strptime(launched_before, '%Y-%m-%d').date():
+                instances_by_date.append(i)
+        instances = instances_by_date
+
+    elif launched_after and not launched_before:
+        for i in instances:
+            if datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() >= \
+                datetime.strptime(launched_after, '%Y-%m-%d').date():
+                instances_by_date.append(i)
+        instances = instances_by_date
+
+    elif launched_before and launched_after:
+        for i in instances:
+            if datetime.strptime(launched_before, '%Y-%m-%d').date() > \
+                datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() >= \
+                datetime.strptime(launched_after, '%Y-%m-%d').date():
+                instances_by_date.append(i)
+        instances = instances_by_date
 
     if ctx.obj['parallel']:
         pool_inputs = []
