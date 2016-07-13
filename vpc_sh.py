@@ -131,22 +131,12 @@ def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_aft
         if instance.state == "running" and instance.id not in skip
     ]
 
-    instances_by_date = []
-    if launched_before and not launched_after:
-        for i in instances:
-            if datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() < \
-                datetime.strptime(launched_before, '%Y-%m-%d').date():
-                instances_by_date.append(i)
-        instances = instances_by_date
-
-    elif launched_after and not launched_before:
-        for i in instances:
-            if datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() >= \
-                datetime.strptime(launched_after, '%Y-%m-%d').date():
-                instances_by_date.append(i)
-        instances = instances_by_date
-
-    elif launched_before and launched_after:
+    if launched_after or launched_before:
+        instances_by_date = []
+        if not launched_before:
+            launched_before = '9999-1-1'
+        if not launched_after:
+            launched_after = '1970-1-1'
         for i in instances:
             if datetime.strptime(launched_before, '%Y-%m-%d').date() > \
                 datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() >= \
