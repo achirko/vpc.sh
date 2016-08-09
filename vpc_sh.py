@@ -33,7 +33,9 @@ class PromptException(Exception):
 @click.option(
     '--parallel', '-p', is_flag=True, help="Run all commands in parallel.")
 @click.option('--command-timeout',
+              '-t',
               help='Command timeout, in seconds. 0 is no timeout.',
+              default=60,
               type=int)
 @click.pass_context
 def vpc_sh(ctx, ec2_api_url, private_key, remote_user, aws_region,
