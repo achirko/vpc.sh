@@ -139,10 +139,14 @@ def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_aft
             launched_after = '1970-1-1'
         for i in instances:
             if datetime.strptime(launched_before, '%Y-%m-%d').date() > \
-                datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() >= \
-                datetime.strptime(launched_after, '%Y-%m-%d').date():
+                    datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() >= \
+                    datetime.strptime(launched_after, '%Y-%m-%d').date():
                 instances_by_date.append(i)
         instances = instances_by_date
+
+    if len(instances) == 0:
+        click.secho("No instances to satisfy provided filters.", fg='blue')
+        ctx.exit()
 
     if ctx.obj['parallel']:
         pool_inputs = []
