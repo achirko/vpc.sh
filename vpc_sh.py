@@ -2,78 +2,42 @@ import os
 import sys
 import time
 import tempfile
-from atexit import register as run_on_exit
-import ConfigParser
 import click
 import boto.ec2
-from fabric.api import env, run, settings, put
-from fabric.api import sudo as run_sudo
-from fabric import exceptions as fabric_exc
+import asyncio
+import asyncssh
 from tabulate import tabulate
-from cStringIO import StringIO
+from io import StringIO
 from contextlib import contextmanager
-import multiprocessing
 from datetime import datetime
+from collections import namedtuple
+from concurrent.futures import FIRST_COMPLETED
 
-SETTINGS_FILE = "~/.vpc.sh/settings"
-
-
-class PromptException(Exception):
-    pass
+Context = namedtuple('Context', 'ec2 private_key remote_user sudo timeout')
 
 
 @click.group()
 @click.option('--ec2-api-url', help='EC2 api url')
-@click.option('--private-key', help='Path to ssh key.')
-@click.option('--remote-user', help='Remote user name.')
-@click.option('--aws-region', help='AWS region.')
-@click.option('--aws-access-key-id', help='AWS access key id.')
-@click.option('--aws-secret-access-key', help='AWS secret access key.')
+@click.option('--private-key', help='Path to ssh key.', envvar='PRIVATE_KEY',
+              required=True)
+@click.option('--remote-user', help='Remote user name.', envvar='REMOTE_USER',
+              required=True)
+@click.option('--aws-region', help='AWS region.', envvar='AWS_REGION',
+              default='eu-west-1')
+@click.option('--aws-access-key-id', help='AWS access key id.', envvar='AWS_ACCESS_KEY_ID',
+              required=True)
+@click.option('--aws-secret-access-key', help='AWS secret access key.', envvar='AWS_SECRET_ACCESS_KEY',
+              required=True)
 @click.option(
     '--sudo', '-s', is_flag=True, help="Run command with sudo privileges.")
-@click.option(
-    '--parallel', '-p', is_flag=True, help="Run all commands in parallel.")
 @click.option('--command-timeout',
               '-t',
               help='Command timeout, in seconds. 0 is no timeout.',
-              default=60,
-              type=int)
+              default=30,
+              type=int, envvar='VPCSH_TIMEOUT')
 @click.pass_context
 def vpc_sh(ctx, ec2_api_url, private_key, remote_user, aws_region,
-           aws_access_key_id, aws_secret_access_key, sudo, parallel,
-           command_timeout):
-    cfg = ConfigParser.RawConfigParser()
-    cfg.read(os.path.expanduser(SETTINGS_FILE))
-
-    private_key = private_key or cfg.get('default', 'private_key')
-    if not private_key:
-        ctx.fail("Please specify path to private ssh key.")
-
-    remote_user = remote_user or cfg.get('default', 'remote_user')
-    if not remote_user:
-        ctx.fail("Please specify remote user name.")
-    remote_user = remote_user.split(',')
-
-    aws_region = aws_region or cfg.get('default', 'aws_region')
-    aws_access_key_id = \
-        aws_access_key_id or cfg.get('default', 'aws_access_key_id')
-    aws_secret_access_key = \
-        aws_secret_access_key or cfg.get('default', 'aws_secret_access_key')
-    ec2_api_url = (
-        ec2_api_url or
-        cfg.get('default', 'ec2_api_url')
-        if cfg.has_option('default', 'ec2_api_url')
-        else None
-    )
-
-    env.key_filename = private_key
-    env.skip_bad_hosts = True
-    env.abort_on_prompts = True
-    env.abort_exception = PromptException
-    env.disable_known_hosts = True
-    env.colorize_errors = True
-    if command_timeout:
-        env.command_timeout = command_timeout
+           aws_access_key_id, aws_secret_access_key, sudo, command_timeout):
 
     if ec2_api_url:
         conn = boto.connect_ec2_endpoint(
@@ -85,13 +49,8 @@ def vpc_sh(ctx, ec2_api_url, private_key, remote_user, aws_region,
             aws_region,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key)
-    run_on_exit(conn.close)
 
-    ctx.obj = dict(aws_conn=conn)
-    ctx.obj['private_key'] = private_key
-    ctx.obj['remote_user'] = remote_user
-    ctx.obj['sudo'] = sudo
-    ctx.obj['parallel'] = parallel
+    ctx.obj = Context(conn, private_key, remote_user, sudo, command_timeout)
 
 
 @vpc_sh.command("run")
@@ -108,6 +67,7 @@ def vpc_sh(ctx, ec2_api_url, private_key, remote_user, aws_region,
 @click.argument("cmd", required=False)
 @click.pass_context
 def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_after):
+
     if not sys.stdin.isatty() and cmd:
         ctx.fail("Invalid input")
 
@@ -127,7 +87,7 @@ def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_aft
 
     instances = [
         instance
-        for instance in ctx.obj['aws_conn'].get_only_instances(filters=ec2_filter)
+        for instance in ctx.obj.ec2.get_only_instances(filters=ec2_filter)
         if instance.state == "running" and instance.id not in skip
     ]
 
@@ -148,61 +108,62 @@ def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_aft
         click.secho("No instances to satisfy provided filters.", fg='blue')
         ctx.exit()
 
-    if ctx.obj['parallel']:
-        pool_inputs = []
-        for instance in instances:
-            pool_inputs.append(
-                (ctx.obj['remote_user'],
-                 ctx.obj['sudo'],
-                 cmd,
-                 instance.tags.get('Name', ''),
-                 instance.id,
-                 instance.private_ip_address,
-                 script,)
+    ioloop = asyncio.get_event_loop()
+    ioloop.run_until_complete(run_command_async(ctx, instances, ioloop, cmd))
+    ioloop.close()
+
+
+async def run_command_async(ctx, instances, ioloop, cmd):
+    async def run_client(host, user, private_key, command, sudo=False):
+        cmd = "bash -c '{} 2>&1'".format(command)
+        if sudo:
+            cmd = 'sudo ' + cmd
+        async with asyncssh.connect(
+                host, username=user,
+                client_keys=[private_key],
+                known_hosts=None
+        ) as conn:
+            return await conn.run(command)
+
+    commands = []
+    Command = namedtuple('Command', 'instance task')
+    for instance in instances:
+        commands.append(Command(
+            instance,
+            ioloop.create_task(
+                run_client(instance.private_ip_address, ctx.obj.remote_user,
+                           ctx.obj.private_key, cmd, ctx.obj.sudo)
             )
+        ))
+    pending = [c.task for c in commands]
+    while True:
+        done, pending = await asyncio.wait(
+            pending, timeout=ctx.obj.timeout, return_when=FIRST_COMPLETED)
 
-        pool_size = len(pool_inputs)
-        lock = multiprocessing.Lock()
-        pool = multiprocessing.Pool(processes=pool_size,
-                                    initializer=mp_init_lock,
-                                    initargs=(lock,))
-        pool.map(mp_run_command_wrapper, pool_inputs)
-        pool.close()
-        pool.join()
-    else:
-        for instance in instances:
-            run_command(
-                ctx.obj['remote_user'],
-                ctx.obj['sudo'],
-                cmd,
-                instance.tags.get('Name', ''),
-                instance.id,
-                instance.private_ip_address,
-                script
-            )
-
-
-@vpc_sh.command("run-one")
-@click.argument("instance-id")
-@click.argument("cmd", required=False)
-@click.pass_context
-def run_one(ctx, instance_id, cmd):
-    if not sys.stdin.isatty() and cmd:
-        ctx.fail("Invalid input")
-
-    script = None
-    if not sys.stdin.isatty():
-        script_str = sys.stdin.read()
-        script = tempfile.NamedTemporaryFile(bufsize=0)
-        os.chmod(script.name, 0666)
-        script.write(script_str)
-
-    instance = ctx.obj['aws_conn'].get_only_instances(instance_ids=[instance_id])[0]
-    run_command(
-        ctx.obj['remote_user'], ctx.obj['sudo'], cmd,
-        instance.tags.get('Name', ''), instance.id,
-        instance.private_ip_address, script
-    )
+        if done:
+            for c in commands:
+                if c.task.done():
+                    commands.remove(c)
+                    table = tabulate(
+                        [[c.instance.tags.get('Name', ''),
+                          c.instance.id, c.instance.private_ip_address]],
+                        tablefmt='simple'
+                    )
+                    click.secho(table, fg='green', bold=True)
+                    click.secho(c.task.result().stdout, fg='green')
+                    click.echo()
+        else:
+            for c in commands:
+                c.task.cancel()
+                table = tabulate(
+                    [[c.instance.tags.get('Name', ''),
+                      c.instance.id, c.instance.private_ip_address]],
+                    tablefmt='simple'
+                )
+                click.secho(table, fg='red', bold=True)
+                click.secho('Timeout', fg='red')
+                click.echo()
+            return
 
 
 def mp_init_lock(l):
@@ -247,7 +208,7 @@ def run_command(remote_user, sudo, cmd, instance_name, instance_id,
                         remote_folder, os.path.basename(script.name)
                     )
                     run("mkdir -p {}".format(remote_folder))
-                    put(script.name, remote_folder, mode=0755)
+                    put(script.name, remote_folder, mode='0755')
                     cmd = remote_script
                 if sudo:
                     run_sudo(cmd)
