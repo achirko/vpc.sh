@@ -14,6 +14,7 @@ from cStringIO import StringIO
 from contextlib import contextmanager
 import multiprocessing
 from datetime import datetime
+from collections import namedtuple
 
 SETTINGS_FILE = "~/.vpc.sh/settings"
 
@@ -108,11 +109,16 @@ def vpc_sh(ctx, ec2_api_url, private_key, remote_user, aws_region,
 @click.argument("cmd", required=False)
 @click.pass_context
 def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_after):
-    if not sys.stdin.isatty() and cmd:
-        ctx.fail("Invalid input")
-
+    Instance = namedtuple('Instance', 'name id hostname')
     script = None
-    if not sys.stdin.isatty():
+    instances = []
+    if not sys.stdin.isatty() and cmd:
+        click.echo('Read inventiry from stdin')
+        instances = [
+            Instance(item, item, item) for item in sys.stdin.read().split()
+        ]
+    elif not sys.stdin.isatty():
+        click.echo('Read command from stdin')
         script_str = sys.stdin.read()
         script = tempfile.NamedTemporaryFile(bufsize=0)
         script.write(script_str)
@@ -125,28 +131,33 @@ def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_aft
         tag_name, tag_value = filter_str.split("=")[0], filter_str.split("=")[1]
         ec2_filter["tag:{}".format(tag_name)] = tag_value
 
-    instances = [
-        instance
-        for instance in ctx.obj['aws_conn'].get_only_instances(filters=ec2_filter)
-        if instance.state == "running" and instance.id not in skip
-    ]
+    if not instances:
+        instances = [
+            instance
+            for instance in ctx.obj['aws_conn'].get_only_instances(filters=ec2_filter)
+            if instance.state == "running" and instance.id not in skip
+        ]
 
-    if launched_after or launched_before:
-        instances_by_date = []
-        if not launched_before:
-            launched_before = '9999-1-1'
-        if not launched_after:
-            launched_after = '1970-1-1'
-        for i in instances:
-            if datetime.strptime(launched_before, '%Y-%m-%d').date() > \
-                    datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() >= \
-                    datetime.strptime(launched_after, '%Y-%m-%d').date():
-                instances_by_date.append(i)
-        instances = instances_by_date
+        if launched_after or launched_before:
+            instances_by_date = []
+            if not launched_before:
+                launched_before = '9999-1-1'
+            if not launched_after:
+                launched_after = '1970-1-1'
+            for i in instances:
+                if datetime.strptime(launched_before, '%Y-%m-%d').date() > \
+                        datetime.strptime(i.launch_time, '%Y-%m-%dT%H:%M:%S.%fZ').date() >= \
+                        datetime.strptime(launched_after, '%Y-%m-%d').date():
+                    instances_by_date.append(i)
+            instances = instances_by_date
 
-    if len(instances) == 0:
-        click.secho("No instances to satisfy provided filters.", fg='blue')
-        ctx.exit()
+        if len(instances) == 0:
+            click.secho("No instances to satisfy provided filters.", fg='blue')
+            ctx.exit()
+        instances = map(
+            lambda i: Instance(i.tags.get('Name'), i.id, i.private_ip_address),
+            instances
+        )
 
     if ctx.obj['parallel']:
         pool_inputs = []
@@ -155,9 +166,9 @@ def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_aft
                 (ctx.obj['remote_user'],
                  ctx.obj['sudo'],
                  cmd,
-                 instance.tags.get('Name', ''),
+                 instance.name,
                  instance.id,
-                 instance.private_ip_address,
+                 instance.hostname,
                  script,)
             )
 
@@ -175,9 +186,9 @@ def run_all(ctx, filter, cmd, skip, ignore_errors, launched_before, launched_aft
                 ctx.obj['remote_user'],
                 ctx.obj['sudo'],
                 cmd,
-                instance.tags.get('Name', ''),
+                instance.name,
                 instance.id,
-                instance.private_ip_address,
+                instance.hostname,
                 script
             )
 
